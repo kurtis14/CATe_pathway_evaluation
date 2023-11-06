@@ -4,6 +4,11 @@
 .Ruserdata
 
 /.quarto/
-.Rdata
 .httr-oauth
 .DS_Store
+
+/_site/
+
+# personal path script
+set-filepath.R
+*.qmd

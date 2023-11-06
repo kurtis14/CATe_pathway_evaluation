@@ -1,5 +1,21 @@
 project:
-  title: "CATe_pathway_evaluation"
+  type: website
 
-editor: visual
+website:
+  title: "CATe Pathway Evaluation"
+  navbar:
+    left:
+      - href: index.qmd
+        text: Summary
 
+format:
+  html:
+    theme: cosmo
+    css: styles.css
+    toc: true
+
+editor: source
+
+
+tbl-cap-location: top
+fig-cap-location: top
