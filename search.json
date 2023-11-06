@@ -1,0 +1,93 @@
+[
+  {
+    "objectID": "index.html",
+    "href": "index.html",
+    "title": "CATe Pathway Evaluation",
+    "section": "",
+    "text": "HealthLink BC has provided a de-identified extract from the MOIS EMR of all CATe encounters from the start of CATe (February 2022) to October 2023.\n\nFirst encounter date: 2022-02-14.\nLast encounter date: 2023-10-31.\nNumber of overall MOA (“parent”) encounters: 13555.\nNumber of clinical (“child”) encounters: 26827.\nUnique patients (based on MOIS chart): 12934.\n\n\n\nThe MOIS EMR extract includes information related to:\n\nPatient demographics (age, gender, city, residence).\nPatient intake information (vaccination status, clinical vulnerability, COVID onset).\nEncounter information (provider type, dates/times, outcome).\n\nBased on this extract, a select number of CATe metrics can be analyzed and reported on. The following section headers starting with “METRIC” indicate relevant metrics. Patient demographics are summarized across encounters based on initial parent encounter.\nNote: tables and figures are initial drafts and can be modified as needed later."
+  },
+  {
+    "objectID": "index.html#total-encounters-by-type-tracking-queue",
+    "href": "index.html#total-encounters-by-type-tracking-queue",
+    "title": "CATe Pathway Evaluation",
+    "section": "Total Encounters by Type (Tracking Queue)",
+    "text": "Total Encounters by Type (Tracking Queue)\n\n\n\n\nTable 1:  Total Number of Encounters by Type encounter_typetracking_queuenpercentCHILD ENCOUNTERCATE - CLINICAL SCREENER2,6666.6%CHILD ENCOUNTERCATE - MOA (VIRTUAL)390.1%CHILD ENCOUNTERCATE - PHARMACIST (VIRTUAL)13,39633.2%CHILD ENCOUNTERCATE - PHYSICIAN (VIRTUAL)10,72626.6%PARENT ENCOUNTERCATE - MOA (VIRTUAL)13,55533.6%"
+  },
+  {
+    "objectID": "index.html#parent-encounters-by-month",
+    "href": "index.html#parent-encounters-by-month",
+    "title": "CATe Pathway Evaluation",
+    "section": "Parent Encounters by Month",
+    "text": "Parent Encounters by Month\n\n\n\n\nFigure 1: Number of CATe Parent Encounters by Month"
+  },
+  {
+    "objectID": "index.html#child-encounters-by-month-and-type",
+    "href": "index.html#child-encounters-by-month-and-type",
+    "title": "CATe Pathway Evaluation",
+    "section": "Child Encounters by Month and Type",
+    "text": "Child Encounters by Month and Type\n\n\n\n\nFigure 2: Number of CATe Child Encounters by Month and Type"
+  },
+  {
+    "objectID": "index.html#encounter-flow",
+    "href": "index.html#encounter-flow",
+    "title": "CATe Pathway Evaluation",
+    "section": "Encounter Flow",
+    "text": "Encounter Flow\nLooking at the diagram below, we can see that the typical encounter order went: MOA, Pharmacist, then Physician; with a noticeable phase where the Clinical Screeners were available after the MOA. However, we also see that some encounter types were repeated (i.e., the loops), likely indicating where patients could not be initially reached by one provider then were passed to a different provider within the same type.\n\n\n\nFigure 3: Flow of Patients by Encounter Type"
+  },
+  {
+    "objectID": "index.html#clinical-screener-implementation",
+    "href": "index.html#clinical-screener-implementation",
+    "title": "CATe Pathway Evaluation",
+    "section": "Clinical Screener Implementation",
+    "text": "Clinical Screener Implementation\n\n\n\n\nFigure 4: Number of Clinical Screener Encounters by Month"
+  },
+  {
+    "objectID": "index.html#age",
+    "href": "index.html#age",
+    "title": "CATe Pathway Evaluation",
+    "section": "Age",
+    "text": "Age\nThe tables below show the distribution of patients’ ages as a continuous number or grouped in 10-year or three-level groupings.\n\n\n\n\nTable 2:  Age (continuous) summary statisticvaluepatient_age_min7.00patient_age_median67.00patient_age_mean63.69patient_age_max102.00patient_age_IQR23.00patient_age_sd17.01\n\n\n\n\n\nAge (group) summary\n\n\n\n\nage_group_10yrnpercent00-19680.5%20-295003.7%30-399867.3%40-491,2058.9%50-591,98514.6%60-692,84621%70-793,63526.8%80-891,94414.3%90+3852.8%\n\n\n\nage_group_3npercent0-14150.1%15-645,99244.2%65+7,54755.7%"
+  },
+  {
+    "objectID": "index.html#gender",
+    "href": "index.html#gender",
+    "title": "CATe Pathway Evaluation",
+    "section": "Gender",
+    "text": "Gender\n\n\n\n\nTable 3:  Gender summary gendernpercentF7,86158%M5,67841.9%Missing160.1%"
+  },
+  {
+    "objectID": "index.html#overall",
+    "href": "index.html#overall",
+    "title": "CATe Pathway Evaluation",
+    "section": "Overall",
+    "text": "Overall\n\n\n\n\nTable 4:  Proportion of Urban/Rural/Indigenous Patients Accessing CATe cmp_residencenpercentRural/Indigenous3,75527.7%Urban9,80072.3%"
+  },
+  {
+    "objectID": "index.html#by-age-and-gender",
+    "href": "index.html#by-age-and-gender",
+    "title": "CATe Pathway Evaluation",
+    "section": "By Age and Gender",
+    "text": "By Age and Gender\nThe distribution of patient residence differed significantly by age group, but not by gender.\n\n\n\n\nFigure 5: Proportion of Patients by Background and Age/Gender"
+  },
+  {
+    "objectID": "index.html#within-encounter-durations",
+    "href": "index.html#within-encounter-durations",
+    "title": "CATe Pathway Evaluation",
+    "section": "Within Encounter Durations",
+    "text": "Within Encounter Durations\nBased on the figure and table below, it appears that patient wait times and encounter durations varied substantially. It seems that the time between the “appointment” and “arrived” variables may indicate the wait time (i.e., from when the patient’s chart was added to that queue until the chart was opened by the provider). It does not appear that there is a good variable to use determine encounter duration - HLBC previously suggested time from “arrived” to “seen”, however, these times are very long.\n\n\n\n\nFigure 6: Within Encounter Durations\n\n\n\n\n\n\n\n\n\nTable 5:  Within Encounter Durations encounter_phasestatisticCATE - CLINICAL SCREENERCATE - MOA (VIRTUAL)CATE - PHARMACIST (VIRTUAL)CATE - PHYSICIAN (VIRTUAL)appoint_to_arrivedminutes_min0.000.000.000.00appoint_to_arrivedminutes_median3.002.002.000.00appoint_to_arrivedminutes_mean3.072.932.150.26appoint_to_arrivedminutes_max43.00101.00101.0050.00appoint_to_arrivedminutes_sd2.292.552.371.53arrived_to_inroomminutes_min0.00237.000.000.00arrived_to_inroomminutes_median399.00985.0050.0038.00arrived_to_inroomminutes_mean912.71737.00329.60370.78arrived_to_inroomminutes_max7,156.00989.005,679.008,534.00arrived_to_inroomminutes_sd988.08433.02661.05722.26arrived_to_seenminutes_min0.001.000.000.00arrived_to_seenminutes_median311.50351.00113.00171.00arrived_to_seenminutes_mean814.60956.49378.10509.97arrived_to_seenminutes_max7,251.0038,545.005,692.007,015.00arrived_to_seenminutes_sd933.281,321.59655.11748.07inroom_to_seenminutes_min-2,496.00-91.00-4,970.00-5,520.00inroom_to_seenminutes_median13.00-65.0031.0072.00inroom_to_seenminutes_mean14.08-51.6753.49141.15inroom_to_seenminutes_max1,546.001.001,722.005,862.00inroom_to_seenminutes_sd72.8047.43118.32300.35seen_to_dischargeminutes_min4.00-1,660.00-2.001.00seen_to_dischargeminutes_median354.0046.00254.5062.00seen_to_dischargeminutes_mean826.23164.57689.07277.80seen_to_dischargeminutes_max37,104.0021,937.00240,365.0022,460.00seen_to_dischargeminutes_sd1,372.16516.583,496.70853.89"
+  },
+  {
+    "objectID": "index.html#across-encounter-durations",
+    "href": "index.html#across-encounter-durations",
+    "title": "CATe Pathway Evaluation",
+    "section": "Across Encounter Durations",
+    "text": "Across Encounter Durations\nSimilarly, we expect that patient encounters should be sequential (e.g., appointment 2 follows appointment 1). However, based on an initial look at the data, the across-encounter times can be either very long or negative.\n\n\n\n\nFigure 7: Across Encounter Durations"
+  },
+  {
+    "objectID": "index.html#total-cate-duration",
+    "href": "index.html#total-cate-duration",
+    "title": "CATe Pathway Evaluation",
+    "section": "Total CATe Duration",
+    "text": "Total CATe Duration\nAnd, we can try to find the entire duration that a patient accessed CATe, from when their chart was first added by the HLBC virtual MOA until they were discharged by a clinician. Note, the encounter type (e.g., “physician”) indicates who provided the final encounter recorded in MOIS before discharge.\nBased on the data currently, it seems that most patients completed all CATe encounter types within 1 day approximately.\n\n\n\n\nFigure 8: Days from First to Last CATe Encounter\n\n\n\n\n\n\n\n\n\nTable 6:  Days from First to Last CATe Encounter statisticCATE - CLINICAL SCREENERCATE - PHARMACIST (VIRTUAL)CATE - PHYSICIAN (VIRTUAL)COMBINEDDays from first to last encounter_max26.77167.0715.86167.07Days from first to last encounter_mean0.960.600.850.80Days from first to last encounter_median0.950.210.440.37Days from first to last encounter_min0.020.010.010.01Days from first to last encounter_sd1.253.080.991.74"
+  }
+]
