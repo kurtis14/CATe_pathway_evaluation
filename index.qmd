@@ -1,0 +1,1177 @@
+---
+title: "CATe Pathway Evaluation"
+editor_options: 
+  chunk_output_type: console
+execute: 
+  echo: false
+  warning: false
+  error: false
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+rm(list = ls())
+
+### load packages
+pacman::p_load(plyr, lubridate, tidyverse, readxl, flextable, leaflet, sf, sp)
+
+### run filepath script
+source('~/GitHub/CATe_pathway_evaluation/set-filepath.R')
+# setwd(path)
+list.files(path, recursive = T)
+
+### load data
+cate <- read_csv(paste0(path, 'HLBC/CATe/MOIS_CATe_02_2022-10_2023.csv'))
+
+### ggplot theme
+theme_set(theme_bw() + theme(legend.position = 'bottom', legend.title = element_blank()))
+
+```
+
+```{r}
+#| label: data-preview
+#| include: false
+
+### data preview
+names(cate)
+str(cate)
+
+# duplicates >>> no duplicates based on encounter ID
+# sum(duplicated(cate))
+cate %>% count(encounter_id, sort = T) %>% filter(n > 1)
+
+```
+
+```{r}
+#| label: clean-dates-times
+#| include: false
+
+### convert date vars
+cate %>% select(matches('_date'))
+cate <- cate %>% mutate(across(matches('_date'), ~mdy(.x)))
+
+### create date-time vars
+# preview
+cate %>% select(matches('_date|_time'))
+
+# join dates and times by call phase, then re-join to main CATe data
+cate <- left_join(cate %>% select(encounter_id, matches('_date')) %>% 
+            gather(var, date, -encounter_id) %>% 
+            mutate(var = str_split_fixed(var, '_', 2)[ , 1]),
+          cate %>% select(encounter_id, matches('_time')) %>% 
+            gather(var, time, -encounter_id) %>% 
+            mutate(var = str_split_fixed(var, '_', 2)[ , 1])
+          ) %>% 
+  mutate(dttm = as_datetime(paste0(date, time)),
+         var = paste0(var, '_dttm')) %>% 
+  select(encounter_id, var, dttm) %>% 
+  spread(var, dttm) %>% 
+  left_join(cate, .)
+
+# check
+summary(cate)
+cate %>% select(matches('appoint_'))
+
+```
+
+```{r}
+#| label: calculate-age-groups
+#| include: false
+
+summary(cate$patient_age)
+
+# prep labels --- will be adjusted later
+age_labels <- tibble(age1 = paste0(seq(0, 9, 1), 0)) %>% 
+  mutate(age2 = as.numeric(age1) + 9,
+         age2 = ifelse(nchar(age2) == 1, paste0('0', age2), age2),
+         label = paste0(age1, '-', age2),
+         label = ifelse(age1 == '90', '90+', label))
+age_labels
+
+# add 10 year age groups --- collapse 90+ and collapse 0-9 and 10-19 together
+cate <- cate %>% mutate(age_group_10yr = as.character(cut(patient_age, seq(-1, 110, 10), 
+                                        labels = c(age_labels$label, age_labels$label[length(age_labels$label)])))) %>% 
+  mutate(age_group_10yr = ifelse(age_group_10yr == '00-09', '10-19', age_group_10yr),
+         age_group_10yr = ifelse(age_group_10yr == '10-19', '00-19', age_group_10yr))
+
+# checks
+cate %>% select(matches('age')) %>% summary()
+cate %>% count(patient_age, age_group_10yr) %>% print(n = 1e4)
+cate %>% count(age_group_10yr)
+
+### add 3 groups for costing
+cate <- cate %>% mutate(age_group_3 = case_when(patient_age <= 14 ~ '0-14',
+                                        patient_age >= 15 & patient_age <= 64 ~ '15-64',
+                                        patient_age >= 65 ~ '65+'))
+cate %>% count(age_group_3)
+cate %>% count(patient_age, age_group_3) %>% print(n = 1e4)
+
+# clean up
+rm(age_labels)
+
+```
+
+# Overview
+
+HealthLink BC has provided a de-identified extract from the MOIS EMR of all CATe encounters from the start of CATe (February 2022) to October 2023.
+
+-   **First encounter date:** `r min(cate$appoint_date)`.
+-   **Last encounter date:** `r max(cate$appoint_date)`.
+-   **Number of overall MOA ("parent") encounters:** `r length(unique(cate$parent_id))`.
+-   **Number of clinical ("child") encounters:** `r cate %>% filter(encounter_type == 'CHILD ENCOUNTER') %>% distinct(encounter_id) %>% nrow()`.
+-   **Unique patients (based on MOIS chart):** `r cate %>% distinct(chart_number) %>% nrow()`.
+
+## Notes & Limitations
+
+The MOIS EMR extract includes information related to:
+
+-   Patient demographics (age, gender, city, residence).
+-   Patient intake information (vaccination status, clinical vulnerability, COVID onset).
+-   Encounter information (provider type, dates/times, outcome).
+
+Based on this extract, a select number of CATe metrics can be analyzed and reported on. The following section headers starting with "METRIC" indicate relevant metrics. Patient demographics are summarized across encounters based on initial parent encounter.
+
+**Note: Tables and figures are initial drafts and can be modified as needed later.**
+
+# METRIC: Number of CATe encounters recorded in the MOIS/other EMR (Encounter Volumes)
+
+There have been a total of `r length(unique(cate$encounter_id))` CATe encounters (i.e., rows in the data extract) recorded in the MOIS EMR extract through October 2023.  
+
+**Note: This number includes all encounters, including both "parent" and "child" encounters, as well as potentially incomplete encounters (e.g., where the pharmacist or physician opened the chart and tried to contact the patient but was unable to).** There were `r cate %>% count(parent_id) %>% filter(n == 1) %>% nrow()` "parent"-only encounters with the MOA and missing a final outcome/disposition, likely indicating that the patient could not be reached.  
+
+## Total Encounters by Type (Tracking Queue)
+
+Based on the table below, there were `r cate %>% filter(grepl('PHYS|PHARM|SCREEN', tracking_queue)) %>% nrow()` encounters where there was an interaction between the patient and a clinician (screener, pharmacist, or physician). We ignore the "parent" and "child/MOA" encounters as this is the first point where the HLBC MOA receives the patient service request and enters it into MOIS, but no interaction happens.  
+
+```{r}
+#| label: tbl-total-encounters
+#| tbl-cap: "Total Number of Encounters by Type"
+
+cate %>% count(encounter_type, tracking_queue) %>% 
+  mutate(percent = paste0(round(100 * n/sum(n), 1), '%')) %>% 
+  flextable() %>% theme_vanilla() %>% autofit()
+
+```
+
+## Parent Encounters by Month
+
+```{r}
+#| label: fig-parent-encounters
+#| fig-cap: "Number of CATe Parent Encounters by Month"
+
+### num of parent encounters by month
+cate_parent <- cate %>% filter(encounter_type == 'PARENT ENCOUNTER')
+cate_parent %>% 
+  mutate(month = floor_date(appoint_date, unit = 'month')) %>% 
+  count(month) %>% 
+  ggplot(aes(x = month, y = n)) + geom_col() +
+  xlab('') + ylab('Number of Parent Encounters') +
+  scale_x_date(date_labels = '%Y-%m')
+
+```
+
+## Child Encounters by Type and Month
+
+```{r}
+#| label: tbl-child-encounters
+#| tbl-cap: "Number of Child Encounters by Type"
+
+cate %>% filter(grepl('PHYS|PHARM|SCREEN', tracking_queue)) %>% 
+  count(tracking_queue) %>% 
+  mutate(percent = paste0(round(100 * n/sum(n), 1), '%')) %>% 
+  flextable() %>% theme_vanilla() %>% autofit()
+
+```
+
+There were `r cate %>% filter(grepl('PHYS|PHARM|SCREEN', tracking_queue)) %>% count(parent_id) %>% filter(n == 1) %>% nrow()` encounters where patients only had one interaction with a clinician.  
+
+```{r}
+#| label: tbl-single-child-encounters
+#| tbl-cap: "Number of Single Child Encounters"
+
+cate %>% filter(grepl('PHYS|PHARM|SCREEN', tracking_queue)) %>% count(parent_id) %>% 
+  filter(n == 1) %>% left_join(., cate) %>%
+  filter(encounter_type == 'CHILD ENCOUNTER') %>% count(tracking_queue) %>% 
+  mutate(percent = paste0(round(100 * n/sum(n), 1), '%')) %>% 
+  flextable() %>% theme_vanilla() %>% autofit()
+
+```
+
+```{r}
+#| label: fig-child-encounters
+#| fig-cap: "Number of CATe Child Encounters by Month and Type"
+
+### num of child encounters by month
+cate %>% filter(encounter_type == 'CHILD ENCOUNTER') %>% 
+  mutate(month = floor_date(appoint_date, unit = 'month')) %>% 
+  count(month, tracking_queue) %>% 
+  mutate(tracking_queue = str_wrap(tracking_queue, width = 20)) %>% 
+  ggplot(aes(x = month, y = n, fill = tracking_queue)) + geom_col() +
+  xlab('') + ylab('Number of Child Encounters') +
+  scale_x_date(date_labels = '%Y-%m')
+
+```
+
+## Encounter Flow
+
+```{r}
+#| label: call-order
+#| include: false
+
+# # determine order of call phases
+# # does encounter ID sequence match times?
+# cate %>% group_by(parent_id) %>% arrange(encounter_id) %>% 
+#   select(parent_id, encounter_id, chart_number, tracking_queue, encounter_type, matches('_dttm'))
+# 
+# # first encounter based on ID is always parent encounter with MOA
+# cate %>% group_by(parent_id) %>% arrange(encounter_id) %>% 
+#   select(parent_id, encounter_id, chart_number, tracking_queue, encounter_type, matches('_dttm')) %>% 
+#   slice(1) %>% ungroup() %>% 
+#   count(tracking_queue, encounter_type)
+# 
+# # second encounters typically with pharmacist
+# cate %>% group_by(parent_id) %>% arrange(encounter_id) %>% 
+#   select(parent_id, encounter_id, chart_number, tracking_queue, encounter_type, matches('_dttm')) %>% 
+#   slice(2) %>% ungroup() %>% 
+#   count(tracking_queue, encounter_type, sort = T) %>% mutate(sum(n))
+# 
+# # third encounters typically with physician
+# cate %>% group_by(parent_id) %>% arrange(encounter_id) %>% 
+#   select(parent_id, encounter_id, chart_number, tracking_queue, encounter_type, matches('_dttm')) %>% 
+#   slice(3) %>% ungroup() %>% 
+#   count(tracking_queue, encounter_type, sort = T) %>% mutate(sum(n))
+# 
+# # most fourth/fifth encounters with physician
+# cate %>% group_by(parent_id) %>% arrange(encounter_id) %>% 
+#   select(parent_id, encounter_id, chart_number, tracking_queue, encounter_type, matches('_dttm')) %>% 
+#   slice(4) %>% ungroup() %>% 
+#   count(tracking_queue, encounter_type, sort = T) %>% mutate(sum(n))
+# 
+# cate %>% group_by(parent_id) %>% arrange(encounter_id) %>% 
+#   select(parent_id, encounter_id, chart_number, tracking_queue, encounter_type, matches('_dttm')) %>% 
+#   slice(5) %>% ungroup() %>% 
+#   count(tracking_queue, encounter_type, sort = T) %>% mutate(sum(n))
+
+```
+
+Looking at the diagram below, we can see that the typical encounter order went: MOA, Pharmacist, then Physician; with a noticeable phase where the Clinical Screeners were available after the MOA. However, we also see that some encounter types were repeated (i.e., the loops), likely indicating where patients could not be initially reached by one provider then were passed to a different provider within the same type.  
+
+**Note: This figure includes all available encounters in MOIS, including "parent" and potentially no-response encounters.**  
+
+```{r}
+#| label: fig-sankey-encounter-flow
+#| fig-cap: "Flow of Patients by Encounter Type"
+
+# # create sankey diagram of first 4 encounters
+# cate %>% group_by(parent_id) %>% arrange(encounter_id) %>% 
+#   slice(1) %>% ungroup() %>% count(tracking_queue)
+# cate %>% group_by(parent_id) %>% arrange(encounter_id) %>% 
+#   slice(2) %>% ungroup() %>% count(tracking_queue)
+# cate %>% group_by(parent_id) %>% arrange(encounter_id) %>% 
+#   slice(3) %>% ungroup() %>% count(tracking_queue)
+# cate %>% group_by(parent_id) %>% arrange(encounter_id) %>% 
+#   slice(4) %>% ungroup() %>% count(tracking_queue)
+
+### prepare sankey links
+# generate links
+links <- bind_rows(
+# 1-2
+left_join(cate %>% group_by(parent_id) %>% arrange(encounter_id) %>% 
+            slice(1) %>% ungroup() %>% select(parent_id, source = tracking_queue),
+          cate %>% group_by(parent_id) %>% arrange(encounter_id) %>% 
+            slice(2) %>% ungroup() %>% select(parent_id, target = tracking_queue)
+          ) %>% 
+  count(source, target, name = 'value'),
+# 2-3
+left_join(cate %>% group_by(parent_id) %>% arrange(encounter_id) %>% 
+            slice(2) %>% ungroup() %>% select(parent_id, source = tracking_queue),
+          cate %>% group_by(parent_id) %>% arrange(encounter_id) %>% 
+            slice(3) %>% ungroup() %>% select(parent_id, target = tracking_queue)
+          ) %>% 
+  count(source, target, name = 'value'),
+# 3-4
+left_join(cate %>% group_by(parent_id) %>% arrange(encounter_id) %>% 
+            slice(3) %>% ungroup() %>% select(parent_id, source = tracking_queue),
+          cate %>% group_by(parent_id) %>% arrange(encounter_id) %>% 
+            slice(4) %>% ungroup() %>% select(parent_id, target = tracking_queue)
+          ) %>% 
+  count(source, target, name = 'value'))
+
+# remove missing values
+links <- links %>% filter(!is.na(source) & !is.na(target))
+
+# create df of nodes
+nodes <- data.frame(name = c(as.character(links$source), as.character(links$target)) %>% unique())
+
+# update link sources/targets
+links$IDsource <- match(links$source, nodes$name)-1
+links$IDtarget <- match(links$target, nodes$name)-1
+
+### generate sankey with plotly
+pacman::p_load(plotly)
+plot_ly(type = "sankey", orientation = "h",
+        node = list(label = nodes$name, pad = 10, thickness = 30,
+                    # color = c('grey', 'grey', 'red', 'grey', 'grey', 'red', 'red', 'green', 'grey', 'grey', 'yellow' ,'yellow'),
+                    line = list(color = "black",width = 1),
+                    hovertemplate = "%{label}"
+                    ),
+        link = list(source = links$IDsource, target = links$IDtarget, value =  links$value)
+        )
+
+```
+
+```{r}
+#| label: cleanup-sankey
+#| include: false
+
+# clean up
+rm(links, nodes)
+
+```
+
+
+## Clinical Screener Implementation
+
+The Clinical Screener phase was implemented from April to October 2022 during CATe's peak encounter volumes.  
+
+```{r}
+#| label: fig-clinical-screen-encounters
+#| fig-cap: "Number of Clinical Screener Encounters by Month"
+
+### num of clinical screens by month
+# cate %>% count(tracking_queue)
+# cate %>% filter(tracking_queue == 'CATE - CLINICAL SCREENER') %>%
+#   select(matches('date')) %>% summary()
+# bind_rows(cate %>% filter(tracking_queue == 'CATE - CLINICAL SCREENER') %>%
+#             mutate(month = floor_date(appoint_date, unit = 'month')) %>%
+#             count(month) %>%
+#             mutate(type = 'screen'),
+#           cate_parent %>%
+#             mutate(month = floor_date(appoint_date, unit = 'month')) %>%
+#             count(month) %>%
+#             mutate(type = 'parent')
+#           ) %>%
+#   ggplot(aes(x = month, y = n)) + geom_col() + facet_wrap(~type)
+
+# plot
+cate %>% filter(tracking_queue == 'CATE - CLINICAL SCREENER') %>% 
+  mutate(month = floor_date(appoint_date, unit = 'month')) %>% 
+  count(month) %>% 
+  ggplot(aes(x = month, y = n)) + geom_col() +
+  xlab('') + ylab('Number of Clinical Screens') +
+  scale_x_date(date_labels = '%Y-%m')
+
+```
+
+# METRIC A1: Age, Sex, Region, ethnic, racial
+
+Age and sex are reported here; region (health authority) and background are reported in a different section below.  
+
+**Note: The data do not contain further information related to patient ethnicity or race.**  
+
+## Age
+
+```{r}
+#| label: investigate-age
+#| include: false
+
+# only use parent encounters
+summary(cate$patient_age)
+cate_parent %>% 
+  select(patient_age) %>% summary()
+
+cate_parent %>% count(age_group_10yr)
+cate_parent %>% count(age_group_3)
+
+```
+
+The tables below show the distribution of patients' ages as a continuous number or grouped in 10-year or three-level groupings. The three-level groupings will be used for further costing analyses using linked administrative data.  
+
+```{r}
+#| label: tbl-age-continuous
+#| tbl-cap: "Age (Continuous) Summary"
+
+cate_parent %>% 
+  select(patient_age) %>% filter(!is.na(patient_age)) %>% 
+  summarize(across(.fns = list(min = min, median = median, mean = mean, max = max, IQR = IQR, sd = sd))) %>% 
+  gather(statistic, value) %>% 
+  mutate(value = round(value, 2)) %>% 
+  flextable() %>% theme_vanilla() %>% autofit()
+
+```
+
+```{r}
+#| label: tbl-age-group
+#| tbl-cap: "Age (Group) Summary"
+#| layout-ncol: 2
+
+cate_parent %>% 
+  count(age_group_10yr) %>% 
+  filter(!is.na(age_group_10yr)) %>% 
+  mutate(percent = paste0(round(100 * n/sum(n), 1), '%')) %>% 
+  flextable() %>% theme_vanilla() %>% autofit()
+
+cate_parent %>% 
+  count(age_group_3) %>% 
+  filter(!is.na(age_group_3)) %>% 
+  mutate(percent = paste0(round(100 * n/sum(n), 1), '%')) %>% 
+  flextable() %>% theme_vanilla() %>% autofit()
+
+```
+
+## Gender
+
+```{r}
+#| label: tbl-gender
+#| tbl-cap: "Gender Summary"
+
+cate_parent %>% 
+  count(gender) %>% 
+  # filter(!is.na(gender)) %>% 
+  mutate(percent = paste0(round(100 * n/sum(n), 1), '%'),
+         gender = ifelse(is.na(gender), 'Missing', gender)) %>% 
+  flextable() %>% theme_vanilla() %>% autofit()
+
+```
+
+# METRIC B2: Proportion of patients from different ethnic/racial backgrounds accessing the CATe virtual HLBC line
+
+There is one variable ("cmp_residence") that indicates if the patient is "urban" or "rural/Indigenous".
+
+## Overall
+
+```{r}
+#| label: tbl-pt-background
+#| tbl-cap: "Proportion of Urban/Rural/Indigenous Patients Accessing CATe"
+
+cate_parent %>% 
+  count(cmp_residence) %>% 
+  mutate(percent = paste0(round(100 * n/sum(n), 1), '%')) %>% 
+  flextable() %>% theme_vanilla() %>% autofit()
+
+```
+
+## By Age and Gender
+
+```{r}
+#| label: investigate-pt-background-diff
+#| include: false
+
+# residence differs significantly by both age groups, but not by gender
+# including whether the youngest age group is included or not
+cate_parent <- cate_parent
+# %>% filter(age_group_10yr != '00-19')
+
+chisq.test(cate_parent$cmp_residence, cate_parent$age_group_10yr)
+chisq.test(cate_parent$cmp_residence, cate_parent$age_group_3)
+chisq.test(cate_parent$cmp_residence, cate_parent$gender)
+
+```
+
+The distribution of patient residence differed significantly by age group, but not by gender.
+
+```{r}
+#| label: fig-pt-background
+#| fig-cap: "Proportion of Patients by Background and Age/Gender"
+
+bind_rows(cate_parent %>% 
+            count(age_group_10yr, cmp_residence) %>% 
+            filter(!is.na(age_group_10yr)) %>% group_by(age_group_10yr) %>% 
+            mutate(p = n/sum(n)) %>% ungroup() %>% mutate(type = 'Age Group', var = age_group_10yr),
+          cate_parent %>% 
+            count(gender, cmp_residence) %>% 
+            filter(!is.na(gender)) %>% group_by(gender) %>% 
+            mutate(p = n/sum(n)) %>% ungroup() %>% mutate(type = 'Gender', var = gender)
+          ) %>% 
+  ggplot(aes(x = var, y = p, fill = cmp_residence)) + geom_col() +
+  facet_wrap(~type, scales = 'free') +
+  xlab('') + ylab('Proportion of Patients')
+
+```
+
+# METRIC: Proportion of Rural/Indigenous Patients Following Guideline Change
+
+Original wording: percentage increase in rural/remote and Indigenous communities receiving medication deliveries after adapting the guidelines.  
+
+**To be further analyzed once the guideline implementation date is received.  
+
+```{r}
+#| label: fig-rural-change
+#| fig-cap: "Proportion of Patients by Background and Time"
+
+cate_parent %>% 
+  mutate(month = floor_date(appoint_date, unit = 'month')) %>% 
+  count(month, cmp_residence) %>% 
+  group_by(month) %>% 
+  mutate(p = n/sum(n)) %>% ungroup() %>% 
+  filter(cmp_residence != 'Urban') %>% 
+  ggplot(aes(x = month, y = p, fill = cmp_residence)) + geom_col() +
+  xlab('') + ylab('Proportion of Patients') +
+  scale_x_date(date_labels = '%Y-%m')
+
+```
+
+# METRIC B5: Proportion of patients from different HA
+
+```{r}
+#| label: geocode-city-HA
+#| include: false
+
+### ALREADY DONE ###
+
+# ### geocode city coordinates
+# cate_parent %>% count(city, sort = T)
+# cate_parent %>% filter(is.na(city)) %>% nrow()
+# 
+# # input distinct cities
+# city_coord <- cate_parent %>% 
+#   mutate(city_orig = city,
+#          city = tolower(city)) %>% 
+#   distinct(city_orig, city) %>%
+#   filter(!is.na(city)) %>%
+#   ## correct names
+#   mutate(city = case_when(city == "lw'alaams" ~ "lax kw'alaams",
+#                           city == 'new westminister' ~ "new westminster",
+#                           city == 'orth vancouver' ~ 'north vancouver',
+#                           city == 'vancovuer' ~ 'vancouver',
+#                           city == 'narmata' ~ 'naramata',
+#                           city == 'naniamo' ~ 'nanaimo',
+#                           city == 'tsey key dene' ~ 'tsay keh dene',
+#                           city == 'halmoon bay' ~ 'halfmoon bay',
+#                           city == 'nort h vancouver' ~ 'north vancouver',
+#                           city == 'ahousat' ~ 'ahousaht',
+#                           city == 'new west minister' ~ 'new westminster',
+#                           TRUE ~ as.character(city))) %>% 
+#   distinct(city, city_orig) %>% 
+#   ## add prov/country for geocoding
+#   mutate(prov = 'British Columbia', country = 'Canada')
+# 
+# # check input
+# city_coord
+# city_coord %>% distinct(city)
+# 
+# # geocode
+# city_coord <- city_coord %>% 
+#   ## test
+#   # sample_n(10) %>% 
+#   tidygeocoder::geocode(., city = 'city', state = 'prov', country = 'country')
+# 
+# # checks -- some cities missing -- could be typos or out of province
+# summary(city_coord)
+# city_coord %>% sample_n(10) %>% as.data.frame()
+# city_coord %>% filter(is.na(lat)) %>% distinct(city) %>% print(n = 1e3)
+# leaflet(city_coord) %>% addTiles() %>%
+#   addMarkers(~long, ~lat, label = ~htmltools::htmlEscape(city))
+# 
+# ### cross-reference with HA boundaries -- intersect city coords with HAs
+# ha <- st_read('Mapping/ha_2018/HA_2018.shp')
+# ha <- st_transform(ha, crs = 'WGS84')
+# ha_pal <- colorFactor('RdYlBu', ha$HA_Name)
+# ha %>% leaflet() %>% addTiles() %>%
+#   addProviderTiles(providers$CartoDB.Positron) %>%
+#   addPolygons(fillColor = ~ha_pal(HA_Name), fillOpacity = 0.7, stroke = T, weight = 1,
+#               opacity = 10, color = "#666", dashArray = "1")
+# 
+# ### create separate spatial df, then look for intersection
+# city_sp <- city_coord %>% filter(!is.na(lat))
+# coordinates(city_sp) <- ~long+lat
+# 
+# # save separate df of missing coordinates
+# miss <- city_coord %>% filter(is.na(lat))
+# city_coord <- city_coord %>% filter(!is.na(lat))
+# 
+# # convert HA and city projection strings
+# ha_sp <- as_Spatial(ha)
+# proj4string(city_sp) <- proj4string(ha_sp)
+# 
+# # intersection
+# city_coord <- bind_cols(city_coord, over(city_sp, ha_sp))
+# 
+# # re-add cities with missing coordinates
+# city_coord <- bind_rows(city_coord, miss)
+# 
+# # checks --- several cities have coordinates but no HA because they are in water
+# city_coord %>% count(HA_Name)
+# city_coord %>% filter(is.na(HA_Name))
+# 
+# # map again with city and HA
+# ha_pal <- colorFactor('Dark2', city_coord$HA_Name)
+# ha %>% leaflet() %>% addTiles() %>%
+#   addProviderTiles(providers$CartoDB.Positron) %>%
+#   addPolygons(fillColor = ~ha_pal(HA_Name), fillOpacity = 0.1, stroke = T, weight = 1,
+#               opacity = 10, color = "#666", dashArray = "1") %>%
+#   addCircles(data = city_coord, ~long, ~lat,
+#              label = ~htmltools::htmlEscape(paste0(city, ' - ', HA_Name)),
+#              fillColor = 'black', color = ~ha_pal(HA_Name),
+#              fillOpacity = 0.7, opacity = 1, radius = 50, stroke = T)
+# 
+# # save city coordinates with HA -- needs to be further checked manually
+# write_csv(city_coord, 'HLBC/CATe/MOIS_city-coords_plus-HA.csv', na = '')
+# 
+# # clean up
+# rm(city_coord, city_sp, ha, ha_sp, miss, ha_pal)
+
+```
+
+```{r}
+#| label: load-HA-data
+#| include: false
+
+# read in geocoded data
+ha <- read_csv(paste0(path, 'HLBC/CATe/MOIS_city-coords_plus-HA.csv'))
+
+# check that all original names are in data
+ha %>% filter(!(city_orig %in% cate_parent$city))
+
+# join HA
+cate_parent <- ha %>% select(city = city_orig, HA = HA_Name) %>% 
+  left_join(cate_parent, .)
+
+# checks
+cate_parent %>% count(encounter_id, sort = T)
+cate_parent %>% count(HA)
+
+# clean up
+rm(ha)
+
+```
+
+Based on patient's city entered in MOIS, we can determine their Health Authority. A small number of patients had no city entered or were out-of-province.  
+
+```{r}
+#| label: tbl-HA
+#| tbl-cap: "Health Authority Summary"
+
+cate_parent %>% 
+  count(HA) %>% 
+  mutate(percent = paste0(round(100 * n/sum(n), 1), '%'),
+         HA = ifelse(is.na(HA), 'Missing', HA)) %>% 
+  flextable() %>% theme_vanilla() %>% autofit()
+
+```
+
+```{r}
+#| label: fig-HA-month
+#| fig-cap: "Health Authority Proportion by Month"
+
+cate_parent %>% 
+  mutate(month = floor_date(appoint_date, unit = 'month')) %>% 
+  count(month, HA) %>% 
+  mutate(HA = str_wrap(HA, width = 20)) %>% 
+  group_by(month) %>% 
+  mutate(p = n/sum(n)) %>% ungroup() %>% 
+  ggplot(aes(x = month, y = p, fill = HA)) + geom_col() +
+  xlab('') + ylab('Proportion') +
+  scale_x_date(date_labels = '%Y-%m')
+
+```
+
+# Encounter Length
+
+```{r}
+#| label: calculate-within-length
+#| include: false
+
+### UPDATE -- use difference of in room and seen times >>> only relevant for clinical child encounters
+cate <- cate %>% 
+  mutate(encounter_length = as.numeric(difftime(seen_dttm, inroom_dttm, units = 'mins')))
+
+# checks
+summary(cate$encounter_length)
+cate %>% 
+  filter(grepl('SCREEN|PHARM|PHYS', tracking_queue)) %>% 
+  ggplot(aes(x = tracking_queue, y = encounter_length, fill = tracking_queue)) +
+  geom_boxplot()
+cate %>% select(tracking_queue, encounter_length) %>% 
+  filter(grepl('SCREEN|PHARM|PHYS', tracking_queue)) %>% 
+  filter(!is.na(encounter_length)) %>% 
+  group_by(tracking_queue) %>% 
+  summarize(across(.fns = list(min = min, median = median, mean = mean, max = max, sd = sd, n = ~sum(!is.na(.x)))))
+cate %>% 
+  filter(grepl('SCREEN|PHARM|PHYS', tracking_queue)) %>% 
+  filter(is.na(encounter_length)) %>% 
+  count(tracking_queue)
+
+# clean up negative/short/extreme values
+cate <- cate %>% mutate(encounter_length = ifelse(encounter_length < 2 | encounter_length > 60*2, NA, encounter_length))
+
+# ### calculate time diffs --- WITHIN ENCOUNTER
+# # appoint > arrive > inroom > seen > discharge
+# cate <- cate %>% select(encounter_id, matches('dttm')) %>% 
+#   gather(var, dttm, -encounter_id) %>% 
+#   mutate(var = factor(var, levels = c('appoint_dttm', 'arrived_dttm', 'inroom_dttm', 
+#                                       'seen_dttm', 'discharge_dttm'))) %>% 
+#   arrange(encounter_id, var) %>% 
+#   mutate(diff = as.numeric(difftime(dttm, lag(dttm), units = 'mins')),
+#          var = gsub('_dttm', '', var),
+#          diff_type = paste0(lag(var), '_to_', var)) %>% 
+#   mutate(diff = ifelse(encounter_id != lag(encounter_id), NA, diff),
+#          diff_type = ifelse(encounter_id != lag(encounter_id), NA, diff_type)) %>% 
+#   select(encounter_id, diff, diff_type) %>% 
+#   filter(!is.na(diff)) %>% 
+#   spread(diff_type, diff, fill = NA) %>% 
+#   left_join(cate, .)
+# 
+# # plus, calculate arrived to seen >>> this was HLBC's encounter duration var for 22/23 report
+# cate <- cate %>% mutate(arrived_to_seen = as.numeric(difftime(seen_dttm, arrived_dttm, units = 'mins')))
+# 
+# # checks
+# cate %>% select(matches('_to_')) %>% summary()
+# cate %>% filter(is.na(arrived_to_inroom)) %>% 
+#   count(encounter_type, tracking_queue, sort = T)
+# cate %>% filter(arrived_to_seen <= 0) %>% slice(15) %>% 
+#   select(parent_id) %>% left_join(., cate)
+# cate %>% arrange(desc(arrived_to_seen)) %>% slice(5) %>% 
+#   select(parent_id) %>% left_join(., cate)
+# cate %>% filter(inroom_to_seen < 0) %>% slice(3) %>% 
+#   select(parent_id) %>% left_join(., cate)
+# 
+# cate %>% select(encounter_id, tracking_queue, matches('_to_')) %>% 
+#   gather(var, mins, -encounter_id, -tracking_queue) %>% 
+#   mutate(mins_group = cut(mins, breaks = c(-Inf, -1, 0, 5, 30, 60, 180, 300, 1440, Inf), right = F)) %>% 
+#   # cut_number(mins, 10)) %>% count(mins_group)
+#   # sample_n(20) %>% arrange(mins)
+#   count(tracking_queue, var, mins_group) %>% 
+#   group_by(tracking_queue, var) %>% 
+#   mutate(p = n/sum(n)) %>% ungroup() %>% 
+#   ggplot(aes(x = var, y = p, fill = mins_group)) + geom_col(colour = 'black') +
+#   facet_wrap(~tracking_queue) +
+#   coord_flip()
+
+```
+
+Using the difference between "in room" and "seen" times, we can calculate the approximate length of time that the CATe clinicians interacted with patients. The times are based on when the clinician opens/closes the chart in MOIS, thus it is possible for there to be negative, 0, or extremely short/long times.  
+
+**Note: Any encounter lengths less than 2 minutes or greater than 120 minutes were treated as NA.**  
+
+As can be seen from the figure and table below, CATe physicians interacted with patients for the longest time on average, followed by pharmacists. However, rates of missing data were high, varying from about 18% to 41%, thus these values should be interpreted cautiously.  
+
+```{r}
+#| label: fig-enc-lengths
+#| fig-cap: "Encounter Length by Tracking Queue"
+
+cate %>% 
+  filter(grepl('SCREEN|PHARM|PHYS', tracking_queue)) %>% 
+  ggplot(aes(x = tracking_queue, y = encounter_length, fill = tracking_queue)) +
+  geom_boxplot() + xlab('') + ylab('Encounter Length (Minutes)')
+
+```
+
+```{r}
+#| label: tbl-enc-length
+#| tbl-cap: "Encounter Length by Tracking Queue"
+
+cate %>% select(tracking_queue, encounter_length) %>% 
+  filter(grepl('SCREEN|PHARM|PHYS', tracking_queue)) %>% 
+  filter(!is.na(encounter_length)) %>% 
+  group_by(tracking_queue) %>% 
+  summarize(across(.fns = list(min = min, median = median, mean = mean, max = max, sd = sd))) %>%
+  gather(statistic, value, -tracking_queue, factor_key = T) %>% 
+  mutate(value = round(value, 2)) %>% 
+  spread(tracking_queue, value) %>% 
+  flextable() %>% theme_vanilla() %>% autofit()
+
+```
+
+```{r}
+#| label: tbl-enc-length-missing
+#| tbl-cap: "Encounter Length Missing by Tracking Queue"
+
+# encounter lengths missing
+cate %>% select(tracking_queue, encounter_length) %>% 
+  filter(grepl('SCREEN|PHARM|PHYS', tracking_queue)) %>% 
+  mutate(encounter_length = ifelse(is.na(encounter_length), 'Missing', 'Present')) %>% 
+  count(tracking_queue, encounter_length) %>% 
+  group_by(tracking_queue) %>% 
+  mutate(percent = paste0(round(100 * n/sum(n), 1), '%')) %>% 
+  flextable() %>% theme_vanilla() %>% autofit()
+
+```
+
+# METRIC B1: Wait time between request & encounter (service wait time)
+
+```{r}
+#| label: calculate-wait-times
+#| include: false
+
+### UPDATE --- calculate wait time from service request to encounter as appointment time to first in room time
+cate_parent <- cate_parent %>% 
+  filter(!is.na(appoint_dttm)) %>% 
+  left_join(., cate %>% 
+              filter(encounter_type == 'CHILD ENCOUNTER') %>% 
+              filter(!is.na(inroom_dttm)) %>% 
+              group_by(parent_id) %>% arrange(encounter_id) %>% 
+              slice(1) %>% ungroup() %>% 
+              select(parent_id, inroom_dttm_child = inroom_dttm)
+            ) %>% 
+  mutate(service_wait_time = as.numeric(difftime(inroom_dttm_child, appoint_dttm, units = 'hours')))
+
+# add var if service occurred on next day
+cate_parent <- cate_parent %>% mutate(service_wait_diffday = ifelse(appoint_date < date(inroom_dttm_child), 1, 0))
+
+# checks
+summary(cate_parent$service_wait_time)
+quantile(cate_parent$service_wait_time, probs = seq(0, 1, by = 0.1), na.rm = T)
+hist(cate_parent$service_wait_time)
+cate_parent %>% filter(service_wait_diffday == 1) %>% 
+  select(appoint_dttm, inroom_dttm_child, outcome, service_wait_time)
+
+### UPDATE --- calculate wait time between encounters as seen time to next in room time
+cate_encounter_wait <- cate %>% filter(encounter_type == 'CHILD ENCOUNTER') %>% 
+  filter(!is.na(seen_dttm) & !is.na(inroom_dttm)) %>% 
+  # group_by(parent_id) %>% arrange(encounter_id) %>% 
+  # slice(1:2) %>% ungroup() %>% 
+  mutate(encounter_wait_time = as.numeric(difftime(inroom_dttm, lag(seen_dttm), units = 'hours')),
+         encounter_wait_time = ifelse(parent_id != lag(parent_id), NA, encounter_wait_time))
+
+# checks
+summary(cate_encounter_wait$encounter_wait_time)
+
+# convert negative values to NA
+cate_encounter_wait <- cate_encounter_wait %>% 
+  mutate(encounter_wait_time = ifelse(encounter_wait_time < 0, NA, encounter_wait_time))
+
+# add var for diff day encounter
+cate_encounter_wait <- cate_encounter_wait %>% 
+  mutate(encounter_wait_diffday = ifelse(inroom_date > lag(seen_date), 1, 0),
+         encounter_wait_diffday = ifelse(parent_id != lag(parent_id), NA, encounter_wait_diffday))
+cate_encounter_wait %>% select(parent_id, encounter_id, seen_date, inroom_date, encounter_wait_diffday)
+
+# rejoin calculated var to main CATe
+cate <- cate_encounter_wait %>% 
+  select(encounter_id, encounter_wait_time, encounter_wait_diffday) %>% 
+  left_join(cate, .)
+
+# checks
+summary(cate$encounter_wait_time); summary(cate$encounter_wait_diffday)
+cate %>% filter(!is.na(encounter_wait_time)) %>% 
+  select(parent_id) %>% sample_n(5) %>% 
+  left_join(., cate) %>% 
+  select(parent_id, encounter_id, encounter_type, tracking_queue, 
+         seen_dttm, inroom_dttm, encounter_wait_time, encounter_wait_diffday, encounter_length)
+
+### UPDATE --- calculate CATe length as time from parent appointment to last child seen
+cate_parent <- cate %>% filter(encounter_type == 'CHILD ENCOUNTER') %>% 
+  filter(!is.na(seen_dttm)) %>% 
+  group_by(parent_id) %>% arrange(desc(encounter_id)) %>% 
+  slice(1) %>% ungroup() %>% 
+  select(parent_id, seen_dttm_child = seen_dttm) %>% 
+  left_join(cate_parent, .) %>% 
+  mutate(total_cate_length = as.numeric(difftime(seen_dttm_child, appoint_dttm, units = 'days')))
+
+# checks
+summary(cate_parent$total_cate_length)
+hist(cate_parent$total_cate_length)
+cate_parent %>% filter(is.na(total_cate_length)) %>% count(outcome)
+
+```
+
+The median wait time from service request ("parent" MOA appointment time) to first encounter (first "child" encounter "in room" time with a clinician) was **approximately 1 hour.** Approximately 21% of encounters occurred on a subsequent day than when the service was received and entered into MOIS. 38 "parent" encounters were missing the time from service request to first encounter.  
+
+```{r}
+#| label: tbl-service-wait-time
+#| tbl-cap: "Service Wait Time Summary"
+
+cate_parent %>% 
+  select(service_wait_time) %>% 
+  filter(!is.na(service_wait_time)) %>% 
+  summarize(across(.fns = list(min = min, median = median, mean = mean, max = max, sd = sd))) %>%
+  gather(statistic, value, factor_key = T) %>% 
+  mutate(value = round(value, 2)) %>% 
+  flextable() %>% theme_vanilla() %>% autofit()
+
+```
+
+```{r}
+#| label: calculate-diffday-percent
+#| include: false
+
+cate_parent %>% 
+  count(service_wait_diffday) %>% 
+  mutate(percent = round(100*n/sum(n), 2))
+
+cate_parent %>% mutate(decile = cut_number(service_wait_time, n = 10)) %>% count(decile)
+
+```
+
+```{r}
+#| label: fig-service-wait-time
+#| fig-cap: "Service Wait Time Histogram"
+
+cate_parent %>% ggplot(aes(x = service_wait_time)) + geom_histogram(fill = 'forestgreen', colour = 'black') +
+  xlab('Service Wait Time (Hours)') + ylab('Count')
+
+```
+
+## METRIC B1: Average wait times for services, broken down by demographic group, to detect disparities
+
+**Service wait times differed significantly by age group and gender,** but not by "cmp_residence". Males were more likely to wait **longer** than females. And the 60-69 and 70-79 age groups were more likely to have a **shorter** wait than the 20-29 or 30-39 age groups.  
+
+```{r}
+#| label: fig-visualize-wait-by-demo
+#| fig-cap: "Service Wait Time (Hours) by Demographic Variable"
+
+# visualize distributions
+cate_parent %>% select(gender, cmp_residence, age_group_10yr, service_wait_time) %>% 
+  gather(var, value, -service_wait_time, factor_key = T) %>% 
+  filter(!is.na(value)) %>% 
+  ggplot(aes(x = value, y = service_wait_time, fill = value)) + geom_boxplot() +
+  facet_wrap(~var, scales = 'free', nrow = 2) +
+  theme(legend.position = 'none') +
+  xlab('') + ylab('Service Wait Time (Hours)')
+
+```
+
+```{r}
+#| label: test-wait-diffs
+#| include: false
+
+### test for diff --- use non-parametric
+cate_parent %>% select(age_group_10yr, gender, cmp_residence, service_wait_time) %>% 
+  gather(var, value, -service_wait_time) %>% 
+  filter(!is.na(value)) %>% 
+  dlply(., .(var), function(x) kruskal.test(service_wait_time ~ value, x))
+
+# TukeyHSD(aov(service_wait_time ~ age_group_10yr, cate_parent))
+pairwise.wilcox.test(cate_parent$service_wait_time, cate_parent$age_group_10yr, 
+                     p.adjust.method = 'fdr')
+
+```
+
+```{r}
+#| label: tbl-wait-by-demo
+#| tbl-cap: "Median Service Wait Time (Hours) by Demographic Variable"
+#| layout-ncol: 3
+
+cate_parent %>% group_by(age_group_10yr) %>% 
+  summarize(median = round(median(service_wait_time, na.rm = T), 2)) %>%
+  mutate(age_group_10yr = ifelse(is.na(age_group_10yr), 'Missing', age_group_10yr)) %>% 
+  flextable() %>% theme_vanilla() %>% autofit()
+
+cate_parent %>% group_by(cmp_residence) %>% 
+  summarize(median = round(median(service_wait_time, na.rm = T), 2)) %>%
+  flextable() %>% theme_vanilla() %>% autofit()
+
+cate_parent %>% group_by(gender) %>% 
+  summarize(median = round(median(service_wait_time, na.rm = T), 2)) %>%
+  mutate(gender = ifelse(is.na(gender), 'Missing', gender)) %>% 
+  flextable() %>% theme_vanilla() %>% autofit()
+
+```
+
+# METRIC: Response time: average time taken to respond to a query or request during high demand periods versus regular periods.
+
+```{r}
+#| label: count-high-demand
+#| include: false
+
+cate_parent %>% 
+  mutate(month = floor_date(appoint_date, unit = 'month')) %>% 
+  count(month, sort = T)
+
+cate %>% filter(tracking_queue == 'CATE - CLINICAL SCREENER') %>% 
+  mutate(month = floor_date(appoint_date, unit = 'month')) %>% 
+  count(month)
+
+cate_parent %>% mutate(month = floor_date(appoint_date, unit = 'month')) %>% 
+  ggplot(aes(x = month, y = service_wait_time, group = month)) + geom_boxplot()
+
+### test for diffs
+cate_demand <- cate_parent %>% 
+  mutate(month = floor_date(appoint_date, unit = 'month')) %>% 
+  mutate(high = ifelse(month >= '2022-04-01' & month <= '2022-09-01', "High Demand", "Low Demand"))
+
+kruskal.test(service_wait_time ~ high, cate_demand)  
+
+cate_demand %>% group_by(high) %>% 
+  summarize(median(service_wait_time, na.rm = T))
+
+```
+
+```{r}
+#| label: cleanup-cate-demand
+#| include: false
+
+rm(cate_demand)
+
+```
+
+Based on the monthly encounter volumes, the high demand period for CATe occurred from April through September 2022, which is when the Clinical Screeners were available. During these months of higher demand, **the median service wait time was significantly longer at 4.6 hours (versus 0.4 hours).**  
+
+```{r}
+#| label: fig-wait-high-demand
+#| fig-cap: "Median Service Wait Time (Hours) By Month"
+
+cate_parent %>% mutate(month = floor_date(appoint_date, unit = 'month')) %>% 
+  group_by(month) %>% 
+  summarize(median = median(service_wait_time, na.rm = T)) %>% 
+  mutate(high = ifelse(month >= '2022-04-01' & month <= '2022-09-01', "High Demand", "Low Demand")) %>% 
+  ggplot(aes(x = month, y = median, fill = high)) + geom_col(colour = 'black') +
+  xlab('') + ylab('Median Service Wait Time (Hours)')
+
+```
+
+# METRIC: Success Indicators (same-service use within 24 hours)
+
+```{r}
+#| include: false
+
+cate_parent %>% count(service_wait_diffday) %>% 
+  mutate(n/sum(n))
+
+cate_encounter_wait %>% count(encounter_wait_diffday) %>% 
+  filter(!is.na(encounter_wait_diffday)) %>% 
+  mutate(n/sum(n))
+
+```
+
+As mentioned above, approximately **79% of patients were seen by a CATe clinician on the same day** that their service request was received by HLBC and entered into MOIS.  
+
+Similarly, we can also look at the time between clinical "child" encounters (e.g., from the clinical screener to pharmacist, pharmacist to physician). Based on a subset of `r cate_encounter_wait %>% filter(!is.na(encounter_wait_diffday)) %>% nrow()` encounters with available time data, **75.5% of subsequent clinical encounters occurred on the same day** as the previous encounter.  
+
+# Patient Outcomes (CATe Disposition)
+
+```{r}
+#| label: pt-outcomes
+#| include: false
+
+### patient outcomes >>> they match across encounters, so can use parent outcome
+cate %>% count(encounter_type, outcome) %>% 
+  spread(encounter_type, n)
+
+cate %>% select(parent_id, outcome, encounter_type) %>% 
+  filter(encounter_type != 'PARENT ENCOUNTER') %>% 
+  anti_join(., cate %>% select(parent_id, outcome, encounter_type) %>% 
+              filter(encounter_type == 'PARENT ENCOUNTER') %>% 
+              select(-encounter_type)
+            )
+
+cate %>% distinct(parent_id) %>% sample_n(3) %>% 
+  left_join(., cate) %>% 
+  select(parent_id, encounter_id, encounter_type, tracking_queue, outcome)
+
+```
+
+Patient outcomes (or CATe disposition) varied widely, but almost half of patients were eligible and prescribed Paxlovid.  
+
+```{r}
+#| label: tbl-pt-outcome
+#| tbl-cap: "Patient Outcome Summary"
+
+cate_parent %>% count(outcome, sort = T) %>% 
+  mutate(outcome = ifelse(is.na(outcome), 'Missing', outcome),
+         percent = round(100 * n/sum(n), 2)) %>% 
+  flextable() %>% theme_vanilla() %>% autofit()
+
+```
+
+```{r}
+#| label: OLD-time-within-encounter
+#| include: false
+
+# Based on the encounter date/time variables available in MOIS, we **should** be able to determine the time spent by each patient from when their service request was first entered by HLBC until they were discharged and different durations within and across encounters (i.e., wait times). The MOIS data are organized with each encounter as a row and date/time variables ordered as columns as appointment/arrived/in room/seen/discharged. **However**, when calculating times by this order, this yields negative and extremely long times - both within and across encounters. **How should these unusual values be handled?**
+# 
+# 
+# Based on the figure and table below, it appears that patient wait times and encounter durations varied substantially. It seems that the time between the "appointment" and "arrived" variables may indicate the wait time (i.e., from when the patient's chart was added to that queue until the chart was opened by the provider). It does not appear that there is a good variable to use determine encounter duration - HLBC previously suggested time from "arrived" to "seen", however, these times are very long.
+
+# cate %>% select(tracking_queue, matches('_to_')) %>% 
+#   filter(tracking_queue != 'CATE - MOA (VIRTUAL)') %>% 
+#   gather(var, mins, -tracking_queue) %>% 
+#   mutate(tracking_queue = str_wrap(tracking_queue, 20)) %>% 
+#   ggplot(aes(x = tracking_queue, y = mins, fill = tracking_queue)) +
+#   geom_boxplot() + facet_wrap(~var, scales = 'free') +
+#   ylab('Minutes') + xlab('')
+
+# cate %>% select(tracking_queue, matches('_to_')) %>% 
+#   gather(encounter_phase, minutes, -tracking_queue) %>% 
+#   filter(!is.na(minutes)) %>% 
+#   group_by(encounter_phase, tracking_queue) %>% 
+#   summarize(across(.fns = list(min = min, median = median, mean = mean, max = max, sd = sd))) %>% 
+#   gather(statistic, value, -encounter_phase, -tracking_queue, factor_key = T) %>% 
+#   mutate(value = round(value, 2)) %>% 
+#   spread(tracking_queue, value) %>% 
+#   flextable() %>% theme_vanilla() %>% autofit()
+
+# ### calculate time diffs --- ACROSS ENCOUNTERS
+# cate <- cate %>% select(parent_id, encounter_id, tracking_queue, matches('_dttm')) %>% 
+#   gather(var, dttm, -parent_id, -encounter_id, -tracking_queue) %>% 
+#   arrange(parent_id, encounter_id) %>% 
+#   group_by(var) %>% 
+#   mutate(diff = as.numeric(difftime(dttm, lag(dttm), units = 'mins'))) %>% 
+#   mutate(diff = ifelse(parent_id != lag(parent_id), NA, diff),
+#          var = paste0(gsub('_dttm', '', var), '_betw_enc')) %>% 
+#   ungroup() %>% filter(!is.na(diff)) %>% 
+#   select(encounter_id, var, diff) %>% 
+#   spread(var, diff, fill = NA) %>% 
+#   left_join(cate, .)
+
+# # checks
+# # checks/viz
+# cate %>% select(matches('_betw')) %>% summary()
+# cate %>% filter(is.na(inroom_betw_enc)) %>% count(encounter_type, tracking_queue, sort = T)
+# cate %>% select(parent_id, encounter_id, tracking_queue, appoint_dttm, appoint_betw_enc)
+
+# Similarly, we expect that patient encounters should be sequential (e.g., appointment 2 follows appointment 1). However, based on an initial look at the data, the across-encounter times can be either very long or negative.
+
+# cate %>% select(tracking_queue, matches('_betw')) %>% 
+#   filter(tracking_queue != 'CATE - MOA (VIRTUAL)') %>%
+#   gather(var, mins, -tracking_queue) %>% 
+#   mutate(tracking_queue = str_wrap(tracking_queue, 20)) %>% 
+#   ggplot(aes(x = tracking_queue, y = mins, fill = tracking_queue)) +
+#   geom_boxplot() + facet_wrap(~var, scales = 'free') +
+#   ylab('Minutes') + xlab('')
+
+# cate %>% select(tracking_queue, matches('_betw')) %>% 
+#   filter(tracking_queue != 'CATE - MOA (VIRTUAL)') %>%
+#   gather(var, mins, -tracking_queue) %>% 
+#   mutate(tracking_queue = str_wrap(tracking_queue, 20)) %>% 
+#   ggplot(aes(x = mins, fill = tracking_queue)) +
+#   geom_histogram() + facet_wrap(~var, scales = 'free')
+
+# And, we can try to find the entire duration that a patient accessed CATe, from when their chart was first added by the HLBC virtual MOA until they were discharged by a clinician. Note, the encounter type (e.g., "physician") indicates who provided the final encounter recorded in MOIS before discharge.
+
+# Based on the data currently, it seems that most patients completed all CATe encounter types within 1 day approximately.
+
+# ### total CATe encounter time --- from MOA appt to last encounter discharge
+# cate <- bind_rows(cate %>% select(parent_id, encounter_id, appoint_dttm) %>% 
+#                     group_by(parent_id) %>% arrange(encounter_id) %>% 
+#                     slice(1) %>% ungroup(),
+#                   cate %>% 
+#                     filter(encounter_type == 'CHILD ENCOUNTER') %>% 
+#                     select(parent_id, encounter_id, discharge_dttm) %>% 
+#                     group_by(parent_id) %>% arrange(desc(encounter_id)) %>% 
+#                     slice(1) %>% ungroup()
+#                   ) %>%
+#   arrange(parent_id, encounter_id) %>% 
+#   mutate(diff = as.numeric(difftime(discharge_dttm, lag(appoint_dttm), units = 'days'))) %>% 
+#   filter(!is.na(diff)) %>% select(encounter_id, first_appt_to_last_discharge = diff) %>% 
+#   left_join(cate, .)
+# 
+# # checks/viz
+# summary(cate$first_appt_to_last_discharge)
+
+# cate_total <- cate %>% select(tracking_queue, first_appt_to_last_discharge)
+# cate_total %>% mutate(tracking_queue = 'COMBINED') %>% 
+#   bind_rows(., cate_total) %>% 
+#   filter(tracking_queue != 'CATE - MOA (VIRTUAL)') %>% 
+#   mutate(tracking_queue = str_wrap(tracking_queue, 20)) %>% 
+#   ggplot(., aes(x = tracking_queue, y = first_appt_to_last_discharge)) +
+#   geom_boxplot() + 
+#   facet_wrap(~tracking_queue, scales = 'free') +
+#   ylab('Days from first to last appointment') + xlab('')
+
+# cate_total %>% mutate(tracking_queue = 'COMBINED') %>% 
+#   bind_rows(., cate_total) %>% 
+#   filter(tracking_queue != 'CATE - MOA (VIRTUAL)') %>% 
+#   filter(!is.na(first_appt_to_last_discharge)) %>% 
+#   group_by(tracking_queue) %>% 
+#   summarize(across(.fns = list(min = min, median = median, mean = mean, max = max, sd = sd))) %>% 
+#   gather(statistic, value, -tracking_queue, factor_key = T) %>% 
+#   mutate(value = round(value, 2),
+#          statistic = gsub('first_appt_to_last_discharge', 'Days from first to last encounter', statistic)) %>% 
+#   spread(tracking_queue, value) %>% 
+#   flextable() %>% theme_vanilla() %>% autofit()
+
+```
