@@ -10,4 +10,4 @@
 /_site/
 
 # personal path script
-set-filepath.R
+*.R

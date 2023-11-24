@@ -1175,3 +1175,11 @@ cate_parent %>% count(outcome, sort = T) %>%
 #   flextable() %>% theme_vanilla() %>% autofit()
 
 ```
+
+<script src="https://utteranc.es/client.js"
+        repo="kurtis14/CATe_pathway_evaluation"
+        issue-term="pathname"
+        theme="github-light"
+        crossorigin="anonymous"
+        async>
+</script>
