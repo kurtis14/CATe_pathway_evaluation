@@ -1176,10 +1176,18 @@ cate_parent %>% count(outcome, sort = T) %>%
 
 ```
 
-<script src="https://utteranc.es/client.js"
-        repo="kurtis14/CATe_pathway_evaluation"
-        issue-term="pathname"
-        theme="github-light"
+<script src="https://giscus.app/client.js"
+        data-repo="kurtis14/CATe_pathway_evaluation"
+        data-repo-id="R_kgDOKqJY-g"
+        data-category="Announcements"
+        data-category-id="DIC_kwDOKqJY-s4CbOi5"
+        data-mapping="pathname"
+        data-strict="0"
+        data-reactions-enabled="1"
+        data-emit-metadata="0"
+        data-input-position="bottom"
+        data-theme="light"
+        data-lang="en"
         crossorigin="anonymous"
         async>
 </script>

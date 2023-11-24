@@ -6,7 +6,7 @@ website:
       - href: index.qmd
         text: Summary
   comments: 
-    utterances: 
+    giscus: 
       repo: kurtis14/CATe_pathway_evaluation
         
 format:
